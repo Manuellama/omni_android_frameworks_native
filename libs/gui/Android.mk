@@ -46,6 +46,9 @@ LOCAL_SHARED_LIBRARIES := \
 	libutils \
 	liblog
 
+ifeq ($(BOARD_EGL_SKIP_FIRST_DEQUEUE),true)
+    LOCAL_CFLAGS += -DSURFACE_SKIP_FIRST_DEQUEUE
+endif
 
 LOCAL_MODULE:= libgui
 
