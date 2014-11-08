@@ -25,6 +25,9 @@
 #include <stdatomic.h>
 
 #include <EGL/egl.h>
+#ifdef USE_MHEAP_SCREENSHOT
+#include <GLES/gl.h>
+#endif
 
 #include <cutils/log.h>
 #include <cutils/properties.h>
@@ -2700,6 +2703,9 @@ status_t SurfaceFlinger::onTransact(
             const int pid = ipc->getCallingPid();
             const int uid = ipc->getCallingUid();
             if ((uid != AID_GRAPHICS) &&
+#ifdef USE_MHEAP_SCREENSHOT
+                 (uid != AID_SYSTEM) &&
+#endif
                     !PermissionCache::checkPermission(sAccessSurfaceFlinger, pid, uid)) {
                 ALOGE("Permission Denial: "
                         "can't access SurfaceFlinger pid=%d, uid=%d", pid, uid);
@@ -2708,6 +2714,9 @@ status_t SurfaceFlinger::onTransact(
             break;
         }
         case CAPTURE_SCREEN:
+#ifdef USE_MHEAP_SCREENSHOT
+        case CAPTURE_SCREEN_DEPRECATED:
+#endif
         {
             // codes that require permission check
             IPCThreadState* ipc = IPCThreadState::self();
@@ -3029,9 +3038,21 @@ status_t SurfaceFlinger::captureScreen(const sp<IBinder>& display,
         virtual bool handler() {
             Mutex::Autolock _l(flinger->mStateLock);
             sp<const DisplayDevice> hw(flinger->getDisplayDevice(display));
-            result = flinger->captureScreenImplLocked(hw, producer,
-                    sourceCrop, reqWidth, reqHeight, minLayerZ, maxLayerZ,
-                    useIdentityTransform, rotation);
+            // bool useReadPixels = this->useReadPixels && !flinger->mGpuToCpuSupported;
+            bool useReadPixels = !flinger->mGpuToCpuSupported;
+            ALOGE("SurfaceFlinger::captureScreen: useReadPixels %i", useReadPixels);
+#ifdef USE_MHEAP_SCREENSHOT
+            if (!useReadPixels) {
+#endif
+                result = flinger->captureScreenImplLocked(hw, producer,
+                        sourceCrop, reqWidth, reqHeight, minLayerZ, maxLayerZ,
+                        useIdentityTransform, rotation);
+#ifdef USE_MHEAP_SCREENSHOT
+            } else {
+                // Should never get here
+                return BAD_VALUE;
+            }
+#endif
             static_cast<GraphicProducerWrapper*>(producer->asBinder().get())->exit(result);
             return true;
         }
@@ -3287,6 +3308,148 @@ void SurfaceFlinger::checkScreenshot(size_t w, size_t s, size_t h, void const* v
     }
 }
 
+#ifdef USE_MHEAP_SCREENSHOT
+status_t SurfaceFlinger::captureScreenImplCpuConsumerLocked(
+        const sp<const DisplayDevice>& hw,
+        sp<IMemoryHeap>* heap, Rect sourceCrop,
+        uint32_t* w, uint32_t* h,
+        uint32_t reqWidth, uint32_t reqHeight,
+        uint32_t minLayerZ, uint32_t maxLayerZ,
+        bool useIdentityTransform,
+        Rotation rotation)
+{
+    ATRACE_CALL();
+
+    // get screen geometry
+    const uint32_t hw_w = hw->getWidth();
+    const uint32_t hw_h = hw->getHeight();
+
+    if ((reqWidth > hw_w) || (reqHeight > hw_h)) {
+        ALOGE("size mismatch (%d, %d) > (%d, %d)",
+                reqWidth, reqHeight, hw_w, hw_h);
+        return BAD_VALUE;
+    }
+
+    reqWidth  = (!reqWidth)  ? hw_w : reqWidth;
+    reqHeight = (!reqHeight) ? hw_h : reqHeight;
+
+    // Convert to surfaceflinger's internal rotation type.
+    Transform::orientation_flags rotationFlags;
+    switch (rotation) {
+        case ISurfaceComposer::eRotateNone:
+            rotationFlags = Transform::ROT_0;
+            break;
+        case ISurfaceComposer::eRotate90:
+            rotationFlags = Transform::ROT_90;
+            break;
+        case ISurfaceComposer::eRotate180:
+            rotationFlags = Transform::ROT_180;
+            break;
+        case ISurfaceComposer::eRotate270:
+            rotationFlags = Transform::ROT_270;
+            break;
+        default:
+            rotationFlags = Transform::ROT_0;
+            ALOGE("Invalid rotation passed to captureScreen(): %d\n", rotation);
+            break;
+    }
+
+    status_t result = NO_ERROR;
+
+    renderScreenImplLocked(hw, sourceCrop, reqWidth, reqHeight,
+        minLayerZ, maxLayerZ, true, useIdentityTransform, rotationFlags);
+
+    size_t size = reqWidth * reqHeight * 4;
+    // allocate shared memory large enough to hold the
+    // screen capture
+    sp<MemoryHeapBase> base(
+            new MemoryHeapBase(size, 0, "screen-capture") );
+    void *vaddr = base->getBase();
+    glReadPixels(0, 0, reqWidth, reqHeight,
+            GL_RGBA, GL_UNSIGNED_BYTE, vaddr);
+    if (glGetError() == GL_NO_ERROR) {
+        *heap = base;
+        *w = reqWidth;
+        *h = reqHeight;
+        result = NO_ERROR;
+    } else {
+        result = INVALID_OPERATION;
+    }
+
+    return result;
+}
+
+status_t SurfaceFlinger::captureScreen(const sp<IBinder>& display,
+        sp<IMemoryHeap>* heap, Rect sourceCrop,
+        uint32_t* outWidth, uint32_t* outHeight,
+        uint32_t reqWidth, uint32_t reqHeight,
+        uint32_t minLayerZ, uint32_t maxLayerZ,
+        bool useIdentityTransform,
+        Rotation rotation)
+{
+    if (CC_UNLIKELY(display == 0))
+        return BAD_VALUE;
+
+    class MessageCaptureScreen : public MessageBase {
+        SurfaceFlinger* flinger;
+        sp<IBinder> display;
+        sp<IMemoryHeap>* heap;
+        Rect sourceCrop;
+        uint32_t* outWidth;
+        uint32_t* outHeight;
+        uint32_t reqWidth;
+        uint32_t reqHeight;
+        uint32_t minLayerZ;
+        uint32_t maxLayerZ;
+        bool useIdentityTransform;
+        Rotation rotation;
+        status_t result;
+    public:
+        MessageCaptureScreen(SurfaceFlinger* flinger,
+                const sp<IBinder>& display, sp<IMemoryHeap>* heap,
+                Rect sourceCrop,
+                uint32_t* outWidth, uint32_t* outHeight,
+                uint32_t reqWidth, uint32_t reqHeight,
+                uint32_t minLayerZ, uint32_t maxLayerZ,
+                bool useIdentityTransform,
+                Rotation rotation)
+            : flinger(flinger), display(display), heap(heap),
+              sourceCrop(sourceCrop),
+              outWidth(outWidth), outHeight(outHeight),
+              reqWidth(reqWidth), reqHeight(reqHeight),
+              minLayerZ(minLayerZ), maxLayerZ(maxLayerZ),
+              useIdentityTransform(useIdentityTransform),
+              rotation(rotation),
+              result(PERMISSION_DENIED)
+        {
+        }
+        status_t getResult() const {
+            return result;
+        }
+        virtual bool handler() {
+            Mutex::Autolock _l(flinger->mStateLock);
+            sp<const DisplayDevice> hw(flinger->getDisplayDevice(display));
+            result = flinger->captureScreenImplCpuConsumerLocked(hw, heap,
+                    sourceCrop,
+                    outWidth, outHeight,
+                    reqWidth, reqHeight, minLayerZ, maxLayerZ,
+                    useIdentityTransform, rotation);
+            return true;
+        }
+    };
+
+    sp<MessageBase> msg = new MessageCaptureScreen(this, display, heap,
+            sourceCrop,
+            outWidth, outHeight, reqWidth, reqHeight, minLayerZ, maxLayerZ,
+            useIdentityTransform, rotation);
+    status_t res = postMessageSync(msg);
+    if (res == NO_ERROR) {
+        res = static_cast<MessageCaptureScreen*>( msg.get() )->getResult();
+    }
+    return res;
+}
+#endif
+
 // ---------------------------------------------------------------------------
 
 SurfaceFlinger::LayerVector::LayerVector() {
@@ -3333,10 +3496,12 @@ SurfaceFlinger::DisplayDeviceState::DisplayDeviceState(DisplayDevice::DisplayTyp
 }; // namespace android
 
 
+#ifndef USE_MHEAP_SCREENSHOT
 #if defined(__gl_h_)
 #error "don't include gl/gl.h in this file"
 #endif
 
 #if defined(__gl2_h_)
 #error "don't include gl2/gl2.h in this file"
+#endif
 #endif
