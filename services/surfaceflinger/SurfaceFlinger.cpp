@@ -3041,18 +3041,9 @@ status_t SurfaceFlinger::captureScreen(const sp<IBinder>& display,
             // bool useReadPixels = this->useReadPixels && !flinger->mGpuToCpuSupported;
             bool useReadPixels = !flinger->mGpuToCpuSupported;
             ALOGE("SurfaceFlinger::captureScreen: useReadPixels %i", useReadPixels);
-#ifdef USE_MHEAP_SCREENSHOT
-            if (!useReadPixels) {
-#endif
-                result = flinger->captureScreenImplLocked(hw, producer,
-                        sourceCrop, reqWidth, reqHeight, minLayerZ, maxLayerZ,
-                        useIdentityTransform, rotation);
-#ifdef USE_MHEAP_SCREENSHOT
-            } else {
-                // Should never get here
-                return BAD_VALUE;
-            }
-#endif
+            result = flinger->captureScreenImplLocked(hw, producer,
+                    sourceCrop, reqWidth, reqHeight, minLayerZ, maxLayerZ,
+                    useIdentityTransform, rotation);
             static_cast<GraphicProducerWrapper*>(producer->asBinder().get())->exit(result);
             return true;
         }
