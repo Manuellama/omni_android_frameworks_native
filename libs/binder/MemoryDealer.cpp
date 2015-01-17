@@ -236,7 +236,13 @@ MemoryDealer::MemoryDealer(size_t size, const char* name)
 MemoryDealer::MemoryDealer(size_t size, const char* name, uint32_t flags)
     : mHeap(new MemoryHeapBase(size, flags, name)),
     mAllocator(new SimpleBestFitAllocator(size))
-{    
+{
+}
+
+MemoryDealer::MemoryDealer(size_t size, const char* name)
+    : mHeap(new MemoryHeapBase(size, 0, name)),
+    mAllocator(new SimpleBestFitAllocator(size))
+{
 }
 
 MemoryDealer::~MemoryDealer()
@@ -356,7 +362,7 @@ ssize_t SimpleBestFitAllocator::alloc(size_t size, uint32_t flags)
                 mList.insertBefore(free_chunk, split);
             }
 
-            ALOGE_IF((flags&PAGE_ALIGNED) && 
+            ALOGE_IF((flags&PAGE_ALIGNED) &&
                     ((free_chunk->start*kMemoryAlign)&(pagesize-1)),
                     "PAGE_ALIGNED requested, but page is not aligned!!!");
 
@@ -439,14 +445,14 @@ void SimpleBestFitAllocator::dump_l(String8& result,
     size_t size = 0;
     int32_t i = 0;
     chunk_t const* cur = mList.head();
-    
+
     const size_t SIZE = 256;
     char buffer[SIZE];
     snprintf(buffer, SIZE, "  %s (%p, size=%u)\n",
             what, this, (unsigned int)mHeapSize);
-    
+
     result.append(buffer);
-            
+
     while (cur) {
         const char* errs[] = {"", "| link bogus NP",
                             "| link bogus PN", "| link bogus NP+PN" };
@@ -458,7 +464,7 @@ void SimpleBestFitAllocator::dump_l(String8& result,
             int(cur->size*kMemoryAlign),
                     int(cur->free) ? "F" : "A",
                     errs[np|pn]);
-        
+
         result.append(buffer);
 
         if (!cur->free)
