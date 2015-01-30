@@ -110,6 +110,13 @@ extern "C" int _ZN7android14SurfaceControl11setPositionEii(int32_t x, int32_t y)
     return _ZN7android14SurfaceControl11setPositionEff((float)x, (float)y);
 }
 
+
+#ifdef USES_LEGACY_SET_POSITION
+status_t SurfaceControl::setPosition(int32_t x, int32_t y) {
+    return setPosition((float)x, (float)y);
+}
+#endif
+
 status_t SurfaceControl::setSize(uint32_t w, uint32_t h) {
     status_t err = validate();
     if (err < 0) return err;
