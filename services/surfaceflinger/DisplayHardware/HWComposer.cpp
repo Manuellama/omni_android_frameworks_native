@@ -55,6 +55,8 @@ namespace android {
 
 #define MIN_HWC_HEADER_VERSION HWC_HEADER_VERSION
 
+#define HAVE_HWC03
+
 static uint32_t hwcApiVersion(const hwc_composer_device_1_t* hwc) {
     uint32_t hwcVersion = hwc->common.version;
     return hwcVersion & HARDWARE_API_VERSION_2_MAJ_MIN_MASK;
@@ -374,7 +376,11 @@ void HWComposer::loadHwcModule()
         return;
     }
 
+#ifdef HAVE_HWC03
+    if (
+#else /*HAVE_HWC03*/
     if (HWC_REMOVE_DEPRECATED_VERSIONS &&
+#endif /*HAVE_HWC03*/
         (!hwcHasApiVersion(mHwc, HWC_DEVICE_API_VERSION_1_0) ||
             hwcHeaderVersion(mHwc) < MIN_HWC_HEADER_VERSION ||
             hwcHeaderVersion(mHwc) > HWC_HEADER_VERSION)) {
